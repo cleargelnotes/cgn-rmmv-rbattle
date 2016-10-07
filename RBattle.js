@@ -2,6 +2,10 @@
 // RBattle.js
 //=============================================================================
 
+var CGN = CGN || {};
+
+CGN.RBattle = CGN.RBattle || {};
+
 /*:
  * @plugindesc Custom Battle Engine
  * @author Ralph Pineda (cleargelnotes)
@@ -82,6 +86,32 @@
 
     ////////////// Next, add a "charge" system
     
+    /////// Setup overrides for db stuff (like notetags and such)
+    // ========= DataManager override ============================
+    CGN.RBattle.DataManager_isDatabaseLoaded = DataManager.isDatabaseLoaded;
+    DataManager.isDatabaseLoaded = function() {
+        if (!CGN.RBattle.DataManager_isDatabaseLoaded.call(this)) return false;
+        if (!CGN._loaded_RBattleTags) {
+          this.processCTBTags($dataItems, {'ctb_cost': 400});
+          this.processCTBTags($dataSkills, {'ctb_cost': 750});
+          CGN._loaded_RBattleTags = true;
+        }
+        return true;
+    };
+    
+    DataManager.processCTBTags = function(data, defaults) {
+        data.forEach(function(item){
+            if(!item) return;
+            if(item.meta['ctb_cost']){
+                item._usageCTBCost = eval(item.meta['ctb_cost']);
+            }else{
+                item._usageCTBCost = defaults['ctb_cost'];
+            }
+        });
+    };
+    // ========= End of DataManager override =====================
+    /////// End of db stuff overrides
+    
     /////// Setup charge system functions
     Game_Unit.prototype.onCTBStart = function() {
         for (var i = 0; i < this.members().length; ++i) {
@@ -99,6 +129,7 @@
     
     Game_Battler.prototype.onCTBStart = function() {
         this._ctbv = 1000;
+        this._ctbActionCost = 0;
         this.calculateInitialCTBV();
         //this._ctbSpeed = eval(Yanfly.Param.CTBInitSpeed);
         //this._ctbSpeed += BattleManager.ctbTarget() * this.ctbStartRate();
@@ -109,6 +140,10 @@
         //this.applyPreemptiveBonusCTB();
         //this.applySurpriseBonusCTB();
         this.refresh();
+    };
+    
+    Game_Battler.prototype.onTurnStart = function() {
+        this._ctbActionCost = 0;
     };
     
     Game_Battler.prototype.calculateInitialCTBV = function() {
@@ -204,7 +239,6 @@
           if (a.agi < b.agi) return -1;
           return 0;
         });
-        console.log(battlers);
         return battlers;
     };
     
@@ -235,15 +269,39 @@
             this.clearActor();
             this.changeActor(this._ctbActorIndex, '');
         }
-        
-        //if (this._surprise || !$gameParty.canInput()) {
-        //    this.startTurn();
-        //}
+    };
+    
+    BattleManager.startTurn = function() {
+        this._phase = 'turn';
+        this.clearActor();
+        this._activeBattler.onTurnStart();
+        $gameTroop.increaseTurn();
+        this.makeActionOrders();
+        $gameParty.requestMotionRefresh();
+        this._logWindow.startTurn();
+    };
+    
+    BattleManager.startAction = function() {
+        var subject = this._subject;
+        var action = subject.currentAction();
+        var targets = action.makeTargets();
+        this._phase = 'action';
+        this._action = action;
+        this._targets = targets;
+        subject.useItem(action.item());
+        if(action.item() != null){
+            console.log(action.item());
+            subject._ctbActionCost += action.item()._usageCTBCost; //TODO: Add battler specialty skill like item usage ctb*0.8 or something
+            console.log("CTBActionCost: "+String(subject._ctbActionCost));
+        }
+        this._action.applyGlobal();
+        this.refreshStatus();
+        this._logWindow.startAction(subject, action, targets);
     };
     
     BattleManager.updateTurnEnd = function() {
         if(this._activeBattler){
-            this._activeBattler.setCTBV(1000);
+            this._activeBattler.setCTBV(this._activeBattler._ctbActionCost);
         }
         this.startInput();
     };
